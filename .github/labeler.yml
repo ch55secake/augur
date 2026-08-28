@@ -1,0 +1,26 @@
+feat:
+  - changed-files:
+      - any-glob-to-any-file:
+          - cmd/**
+          - internal/**
+
+chore:
+  - changed-files:
+      - any-glob-to-any-file:
+          - .github/**
+          - flake.lock
+          - flake.nix
+          - go.mod
+          - go.sum
+
+test:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "**/*_test.go"
+          - tests/**
+
+documentation:
+  - changed-files:
+      - any-glob-to-any-file:
+          - AGENTS.md
+          - README.md

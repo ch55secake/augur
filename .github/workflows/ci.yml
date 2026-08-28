@@ -1,0 +1,26 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  go-build:
+    uses: ch55secake/cheesecake-factory/.github/workflows/go-build.yml@main
+
+  go-lint:
+    uses: ch55secake/cheesecake-factory/.github/workflows/go-lint.yml@main
+
+  go-vuln:
+    uses: ch55secake/cheesecake-factory/.github/workflows/go-vuln.yml@main
+    with:
+      go-package: ./...

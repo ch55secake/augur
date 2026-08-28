@@ -1,0 +1,12 @@
+{
+  "poll_interval": "1s",
+  "ssh_ports": [22],
+  "recognized_networks": [
+    {
+      "name": "trusted-lan",
+      "cidr": "192.168.1.0/24"
+    }
+  ],
+  "enforce": true,
+  "log_level": "info"
+}

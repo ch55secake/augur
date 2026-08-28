@@ -8,6 +8,7 @@ chore:
   - changed-files:
       - any-glob-to-any-file:
           - .github/**
+          - Makefile
           - flake.lock
           - flake.nix
           - go.mod

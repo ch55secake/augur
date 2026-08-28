@@ -16,6 +16,9 @@ concurrency:
 jobs:
   go-build:
     uses: ch55secake/cheesecake-factory/.github/workflows/go-build.yml@main
+    with:
+      build-command: make build
+      test-command: make test
 
   go-lint:
     uses: ch55secake/cheesecake-factory/.github/workflows/go-lint.yml@main

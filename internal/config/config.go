@@ -2,6 +2,8 @@ package config
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -42,10 +44,18 @@ type Network struct {
 	CIDR string `json:"cidr"`
 }
 
+type Device struct {
+	Name        string   `json:"name,omitempty"`
+	User        string   `json:"user,omitempty"`
+	Fingerprint string   `json:"fingerprint"`
+	Networks    []string `json:"networks,omitempty"`
+}
+
 type Config struct {
 	PollInterval Duration  `json:"poll_interval"`
 	SSHPorts     []int     `json:"ssh_ports"`
 	Networks     []Network `json:"recognized_networks"`
+	Devices      []Device  `json:"recognized_devices"`
 	Enforce      bool      `json:"enforce"`
 	LogPath      string    `json:"log_path,omitempty"`
 	LogLevel     string    `json:"log_level,omitempty"`
@@ -120,12 +130,34 @@ func (c Config) Validate() error {
 		seenPorts[port] = struct{}{}
 	}
 
-	if len(c.Networks) == 0 {
-		return errors.New("recognized_networks must contain at least one network")
-	}
+	networkNames := make(map[string]struct{}, len(c.Networks))
 	for index, network := range c.Networks {
 		if _, err := ParsePrefix(network.CIDR); err != nil {
 			return fmt.Errorf("recognized_networks[%d]: %w", index, err)
+		}
+		if network.Name == "" {
+			continue
+		}
+		if _, exists := networkNames[network.Name]; exists {
+			return fmt.Errorf("recognized_networks[%d]: network name %q is duplicated", index, network.Name)
+		}
+		networkNames[network.Name] = struct{}{}
+	}
+
+	if len(c.Devices) == 0 {
+		return errors.New("recognized_devices must contain at least one device")
+	}
+	for index, device := range c.Devices {
+		if !validFingerprint(device.Fingerprint) {
+			return fmt.Errorf("recognized_devices[%d]: fingerprint %q is not a SHA256 SSH fingerprint", index, device.Fingerprint)
+		}
+		for networkIndex, networkName := range device.Networks {
+			if strings.TrimSpace(networkName) == "" {
+				return fmt.Errorf("recognized_devices[%d].networks[%d]: network name is empty", index, networkIndex)
+			}
+			if _, exists := networkNames[networkName]; !exists {
+				return fmt.Errorf("recognized_devices[%d].networks[%d]: network %q is not defined", index, networkIndex, networkName)
+			}
 		}
 	}
 
@@ -166,4 +198,67 @@ func (c Config) MatchNetwork(address netip.Addr) (Network, bool) {
 	}
 
 	return Network{}, false
+}
+
+func (c Config) MatchDevice(user string, fingerprints []string, address netip.Addr) (Device, bool) {
+	address = address.Unmap()
+	for _, device := range c.Devices {
+		if device.User != "" && device.User != user {
+			continue
+		}
+		if !containsFingerprint(fingerprints, device.Fingerprint) {
+			continue
+		}
+		if !c.deviceMatchesNetwork(device, address) {
+			continue
+		}
+		return device, true
+	}
+
+	return Device{}, false
+}
+
+func (c Config) deviceMatchesNetwork(device Device, address netip.Addr) bool {
+	if len(device.Networks) > 0 {
+		for _, name := range device.Networks {
+			for _, network := range c.Networks {
+				if network.Name != name {
+					continue
+				}
+				prefix, err := ParsePrefix(network.CIDR)
+				if err == nil && prefix.Contains(address) {
+					return true
+				}
+			}
+		}
+		return false
+	}
+
+	if len(c.Networks) == 0 {
+		return true
+	}
+	_, recognized := c.MatchNetwork(address)
+	return recognized
+}
+
+func containsFingerprint(fingerprints []string, want string) bool {
+	for _, fingerprint := range fingerprints {
+		if fingerprint == want {
+			return true
+		}
+	}
+	return false
+}
+
+func validFingerprint(value string) bool {
+	const prefix = "SHA256:"
+	if value != strings.TrimSpace(value) {
+		return false
+	}
+	if !strings.HasPrefix(value, prefix) {
+		return false
+	}
+	encoded := strings.TrimPrefix(value, prefix)
+	decoded, err := base64.RawStdEncoding.DecodeString(encoded)
+	return err == nil && len(decoded) == sha256.Size && base64.RawStdEncoding.EncodeToString(decoded) == encoded
 }

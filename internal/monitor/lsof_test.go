@@ -46,6 +46,30 @@ func TestLsofDiscoverer(t *testing.T) {
 	}
 }
 
+func TestParseLsofOutputUsesLoginNameWhenAvailable(t *testing.T) {
+	data := []byte("p101\ncsshd\nu501\nLalice\nn192.168.1.109:22->192.168.1.50:54321\nTST=ESTABLISHED\n")
+
+	connections, err := ParseLsofOutput(data, map[int]struct{}{22: {}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(connections) != 1 || connections[0].User != "alice" {
+		t.Fatalf("connections = %#v, want login name alice", connections)
+	}
+}
+
+func TestParseLsofOutputAcceptsSplitSSHSessionProcess(t *testing.T) {
+	data := []byte("p101\ncsshd-session\nu501\nLalice\nn192.168.1.109:22->192.168.1.50:54321\nTST=ESTABLISHED\n")
+
+	connections, err := ParseLsofOutput(data, map[int]struct{}{22: {}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(connections) != 1 || connections[0].Command != "sshd-session" {
+		t.Fatalf("connections = %#v, want sshd-session connection", connections)
+	}
+}
+
 func TestLsofDiscovererTreatsNoMatchesAsEmpty(t *testing.T) {
 	discoverer := NewLsofDiscoverer(&fakeRunner{err: exitError(1)}, []int{22})
 
@@ -58,16 +82,39 @@ func TestLsofDiscovererTreatsNoMatchesAsEmpty(t *testing.T) {
 	}
 }
 
+func TestLsofConnectionVerifier(t *testing.T) {
+	runner := &fakeRunner{output: []byte("p101\ncsshd\nu501\nLalice\nn192.168.1.109:22->192.168.1.50:54321\nTST=ESTABLISHED\n")}
+	verifier := NewLsofConnectionVerifier(runner)
+	expected := Connection{
+		PID:    101,
+		Local:  mustAddrPort(t, "192.168.1.109:22"),
+		Remote: mustAddrPort(t, "192.168.1.50:54321"),
+	}
+
+	verified, err := verifier.Verify(context.Background(), expected)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !verified {
+		t.Fatal("connection was not verified")
+	}
+	if runner.name != "lsof" {
+		t.Fatalf("command = %q, want lsof", runner.name)
+	}
+}
+
 type fakeRunner struct {
-	output []byte
-	err    error
-	name   string
-	args   []string
+	output    []byte
+	err       error
+	name      string
+	args      []string
+	callCount int
 }
 
 func (r *fakeRunner) Run(_ context.Context, name string, args ...string) ([]byte, error) {
 	r.name = name
 	r.args = args
+	r.callCount++
 	return r.output, r.err
 }
 

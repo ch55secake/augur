@@ -6,12 +6,14 @@ import (
 )
 
 type Connection struct {
-	PID     int
-	Command string
-	User    string
-	Local   netip.AddrPort
-	Remote  netip.AddrPort
-	State   string
+	PID                   int
+	Command               string
+	User                  string
+	Local                 netip.AddrPort
+	Remote                netip.AddrPort
+	State                 string
+	AuthenticationMethods []string
+	PublicKeyFingerprints []string
 }
 
 func (c Connection) NetworkFingerprint() string {

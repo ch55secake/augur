@@ -7,6 +7,13 @@
       "cidr": "192.168.1.0/24"
     }
   ],
+  "recognized_devices": [
+    {
+      "name": "my-mac",
+      "user": "your-account",
+      "fingerprint": "SHA256:REPLACE_WITH_SSH_KEY_FINGERPRINT"
+    }
+  ],
   "enforce": true,
   "log_level": "info"
 }

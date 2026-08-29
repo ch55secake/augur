@@ -71,26 +71,35 @@ func (p SystemProcessController) Signal(pid int, signal os.Signal) error {
 }
 
 type TreeTerminator struct {
-	Processes ProcessController
+	Processes   ProcessController
+	Connections ConnectionVerifier
 }
 
-func (t TreeTerminator) Terminate(ctx context.Context, pid int) error {
+type ConnectionVerifier interface {
+	Verify(context.Context, Connection) (bool, error)
+}
+
+func (t TreeTerminator) Terminate(ctx context.Context, connection Connection) error {
 	if t.Processes == nil {
 		return errors.New("tree terminator has no process controller")
 	}
 
-	command, err := t.Processes.Command(ctx, pid)
+	command, err := t.Processes.Command(ctx, connection.PID)
 	if err != nil {
 		return err
 	}
 	if !isSSHSessionCommand(command) {
-		return fmt.Errorf("refusing to terminate PID %d with command %q", pid, command)
+		return fmt.Errorf("refusing to terminate PID %d with command %q", connection.PID, command)
+	}
+	if err := t.verifyConnection(ctx, connection); err != nil {
+		return err
 	}
 
-	return t.terminateTree(ctx, pid, make(map[int]struct{}), true)
+	return t.terminateTree(ctx, connection, make(map[int]struct{}), true)
 }
 
-func (t TreeTerminator) terminateTree(ctx context.Context, pid int, visited map[int]struct{}, validate bool) error {
+func (t TreeTerminator) terminateTree(ctx context.Context, connection Connection, visited map[int]struct{}, validate bool) error {
+	pid := connection.PID
 	if _, seen := visited[pid]; seen {
 		return nil
 	}
@@ -101,7 +110,7 @@ func (t TreeTerminator) terminateTree(ctx context.Context, pid int, visited map[
 		return err
 	}
 	for _, child := range children {
-		if err := t.terminateTree(ctx, child, visited, false); err != nil {
+		if err := t.terminateTree(ctx, Connection{PID: child}, visited, false); err != nil {
 			return err
 		}
 	}
@@ -113,10 +122,27 @@ func (t TreeTerminator) terminateTree(ctx context.Context, pid int, visited map[
 		if !isSSHSessionCommand(command) {
 			return fmt.Errorf("refusing to terminate PID %d after revalidation with command %q", pid, command)
 		}
+		if err := t.verifyConnection(ctx, connection); err != nil {
+			return err
+		}
 	}
 
 	if err := t.Processes.Signal(pid, syscall.SIGTERM); err != nil && !errors.Is(err, syscall.ESRCH) {
 		return fmt.Errorf("send SIGTERM to PID %d: %w", pid, err)
+	}
+	return nil
+}
+
+func (t TreeTerminator) verifyConnection(ctx context.Context, connection Connection) error {
+	if t.Connections == nil {
+		return nil
+	}
+	verified, err := t.Connections.Verify(ctx, connection)
+	if err != nil {
+		return err
+	}
+	if !verified {
+		return fmt.Errorf("refusing to terminate PID %d after connection revalidation failed", connection.PID)
 	}
 	return nil
 }
@@ -128,5 +154,9 @@ func isSSHSessionCommand(command string) bool {
 	}
 
 	name := strings.TrimSuffix(filepath.Base(fields[0]), ":")
-	return name == "sshd" && strings.Contains(fields[0], ":")
+	return (name == "sshd" || name == "sshd-session") && strings.Contains(fields[0], ":")
+}
+
+func isSSHDaemonCommand(command string) bool {
+	return command == "sshd" || command == "sshd-session"
 }

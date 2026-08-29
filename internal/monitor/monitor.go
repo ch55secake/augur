@@ -14,15 +14,16 @@ type Discoverer interface {
 }
 
 type Enforcer interface {
-	Terminate(context.Context, int) error
+	Terminate(context.Context, Connection) error
 }
 
 type Monitor struct {
-	Discoverer Discoverer
-	Enforcer   Enforcer
-	Config     config.Config
-	Logger     *slog.Logger
-	terminated map[string]struct{}
+	Discoverer       Discoverer
+	Enforcer         Enforcer
+	IdentityResolver IdentityResolver
+	Config           config.Config
+	Logger           *slog.Logger
+	terminated       map[string]struct{}
 }
 
 func New(discoverer Discoverer, enforcer Enforcer, settings config.Config, logger *slog.Logger) *Monitor {
@@ -73,20 +74,34 @@ func (m *Monitor) Scan(ctx context.Context) error {
 	for _, connection := range connections {
 		key := connection.Key()
 		active[key] = struct{}{}
+		if m.IdentityResolver != nil {
+			identity, err := m.IdentityResolver.Resolve(ctx, connection)
+			if err != nil {
+				m.Logger.Error("resolve SSH identity", "pid", connection.PID, "error", err)
+			} else {
+				connection.AuthenticationMethods = identity.AuthenticationMethods
+				connection.PublicKeyFingerprints = identity.PublicKeyFingerprints
+			}
+		}
 
 		network, recognized := m.Config.MatchNetwork(connection.Remote.Addr())
+		device, deviceRecognized := m.Config.MatchDevice(connection.User, connection.PublicKeyFingerprints, connection.Remote.Addr())
 		m.Logger.Info("active SSH connection",
 			"pid", connection.PID,
 			"user", connection.User,
 			"local_address", connection.Local.String(),
 			"remote_address", connection.Remote.String(),
 			"network_fingerprint", connection.NetworkFingerprint(),
+			"authentication_methods", connection.AuthenticationMethods,
+			"key_fingerprints", connection.PublicKeyFingerprints,
 			"state", connection.State,
-			"recognized", recognized,
+			"recognized", deviceRecognized,
 			"network", network.Name,
+			"network_recognized", recognized,
+			"device", device.Name,
 		)
 
-		if recognized || !m.Config.Enforce {
+		if deviceRecognized || !m.Config.Enforce {
 			continue
 		}
 		if _, alreadyTerminated := m.terminated[key]; alreadyTerminated {
@@ -96,8 +111,8 @@ func (m *Monitor) Scan(ctx context.Context) error {
 			return &missingDependencyError{name: "enforcer"}
 		}
 
-		m.Logger.Warn("terminating unrecognized SSH connection", "pid", connection.PID, "remote_address", connection.Remote.String())
-		if err := m.Enforcer.Terminate(ctx, connection.PID); err != nil {
+		m.Logger.Warn("terminating unrecognized SSH connection", "pid", connection.PID, "remote_address", connection.Remote.String(), "key_fingerprints", connection.PublicKeyFingerprints)
+		if err := m.Enforcer.Terminate(ctx, connection); err != nil {
 			m.Logger.Error("terminate unrecognized SSH connection", "pid", connection.PID, "error", err)
 			continue
 		}

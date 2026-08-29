@@ -33,6 +33,8 @@
                 "$out/share/launchd/com.ch55secake.augur.plist"
               install -Dm644 ${./config/augur.example.json} \
                 "$out/share/augur/config.example.json"
+              install -Dm644 ${./packaging/sshd_config.d/000-augur.conf} \
+                "$out/share/ssh/sshd_config.d/000-augur.conf"
               substituteInPlace "$out/share/launchd/com.ch55secake.augur.plist" \
                 --replace-fail /usr/local/bin/augur "$out/bin/augur"
             '';

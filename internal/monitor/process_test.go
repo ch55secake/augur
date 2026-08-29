@@ -14,7 +14,7 @@ func TestTreeTerminatorSignalsChildrenBeforeRoot(t *testing.T) {
 	}
 	terminator := TreeTerminator{Processes: processes}
 
-	if err := terminator.Terminate(context.Background(), 101); err != nil {
+	if err := terminator.Terminate(context.Background(), Connection{PID: 101}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -28,7 +28,7 @@ func TestTreeTerminatorRefusesListener(t *testing.T) {
 	processes := &fakeProcesses{commands: map[int]string{101: "sshd -D"}}
 	terminator := TreeTerminator{Processes: processes}
 
-	if err := terminator.Terminate(context.Background(), 101); err == nil {
+	if err := terminator.Terminate(context.Background(), Connection{PID: 101}); err == nil {
 		t.Fatal("listener was accepted for termination")
 	}
 	if len(processes.signals) != 0 {
@@ -36,10 +36,45 @@ func TestTreeTerminatorRefusesListener(t *testing.T) {
 	}
 }
 
+func TestTreeTerminatorAcceptsSplitSSHSessionProcess(t *testing.T) {
+	processes := &fakeProcesses{commands: map[int]string{101: "sshd-session: alice@ttys001"}}
+	terminator := TreeTerminator{Processes: processes}
+
+	if err := terminator.Terminate(context.Background(), Connection{PID: 101}); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(processes.signals, []int{101}) {
+		t.Fatalf("signals = %v, want [101]", processes.signals)
+	}
+}
+
+func TestTreeTerminatorRevalidatesConnectionBeforeSignal(t *testing.T) {
+	processes := &fakeProcesses{commands: map[int]string{101: "sshd: alice@ttys001"}}
+	verifier := &recordingConnectionVerifier{verified: true}
+	terminator := TreeTerminator{Processes: processes, Connections: verifier}
+
+	if err := terminator.Terminate(context.Background(), Connection{PID: 101}); err != nil {
+		t.Fatal(err)
+	}
+	if verifier.calls != 2 {
+		t.Fatalf("connection verifications = %d, want 2", verifier.calls)
+	}
+}
+
 type fakeProcesses struct {
 	commands map[int]string
 	children map[int][]int
 	signals  []int
+}
+
+type recordingConnectionVerifier struct {
+	verified bool
+	calls    int
+}
+
+func (v *recordingConnectionVerifier) Verify(context.Context, Connection) (bool, error) {
+	v.calls++
+	return v.verified, nil
 }
 
 func (p *fakeProcesses) Children(_ context.Context, pid int) ([]int, error) {

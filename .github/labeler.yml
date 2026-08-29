@@ -8,11 +8,13 @@ chore:
   - changed-files:
       - any-glob-to-any-file:
           - .github/**
+          - config/**
           - Makefile
           - flake.lock
           - flake.nix
           - go.mod
           - go.sum
+          - packaging/**
 
 test:
   - changed-files:

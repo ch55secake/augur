@@ -4,7 +4,8 @@
 
 - This is the Go module `github.com/ch55secake/augur`, targeting Go `1.26.5`.
 - The intended program is a launchd service that watches active SSH connections and terminates unrecognized ones.
-- There are currently no Go packages; commands run from the repository root.
+- The executable entrypoint is `cmd/augur`; connection discovery, enforcement, and orchestration live under `internal/monitor`, and JSON configuration lives under `internal/config`.
+- `packaging/com.ch55secake.augur.plist` is a root LaunchDaemon definition; it is not a per-user LaunchAgent.
 
 ## Verification
 
@@ -12,7 +13,6 @@
 - Run `make build` and `make test` for build and test verification; these wrap the commands used by shared CI.
 - Use `nix develop` for the flake-provided Go development shell and `nix flake check --no-build` to evaluate flake outputs.
 - The Makefile provides `make build`, `make test`, `make tidy`, `make check`, and `make dev-shell` equivalents.
-- `make test` skips cleanly while no Go packages exist; errors from `go list` or package tests still fail the target.
 - Shared CI also runs golangci-lint and govulncheck through `ch55secake/cheesecake-factory`; do not duplicate those workflows locally.
 
 ## GitHub Automation

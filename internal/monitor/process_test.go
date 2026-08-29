@@ -1,0 +1,56 @@
+package monitor
+
+import (
+	"context"
+	"os"
+	"reflect"
+	"testing"
+)
+
+func TestTreeTerminatorSignalsChildrenBeforeRoot(t *testing.T) {
+	processes := &fakeProcesses{
+		commands: map[int]string{101: "sshd: alice@ttys001"},
+		children: map[int][]int{101: {102, 103}, 102: {104}},
+	}
+	terminator := TreeTerminator{Processes: processes}
+
+	if err := terminator.Terminate(context.Background(), 101); err != nil {
+		t.Fatal(err)
+	}
+
+	want := []int{104, 102, 103, 101}
+	if !reflect.DeepEqual(processes.signals, want) {
+		t.Fatalf("signals = %v, want %v", processes.signals, want)
+	}
+}
+
+func TestTreeTerminatorRefusesListener(t *testing.T) {
+	processes := &fakeProcesses{commands: map[int]string{101: "sshd -D"}}
+	terminator := TreeTerminator{Processes: processes}
+
+	if err := terminator.Terminate(context.Background(), 101); err == nil {
+		t.Fatal("listener was accepted for termination")
+	}
+	if len(processes.signals) != 0 {
+		t.Fatalf("signals = %v, want none", processes.signals)
+	}
+}
+
+type fakeProcesses struct {
+	commands map[int]string
+	children map[int][]int
+	signals  []int
+}
+
+func (p *fakeProcesses) Children(_ context.Context, pid int) ([]int, error) {
+	return p.children[pid], nil
+}
+
+func (p *fakeProcesses) Command(_ context.Context, pid int) (string, error) {
+	return p.commands[pid], nil
+}
+
+func (p *fakeProcesses) Signal(pid int, _ os.Signal) error {
+	p.signals = append(p.signals, pid)
+	return nil
+}

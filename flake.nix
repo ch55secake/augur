@@ -27,6 +27,15 @@
             src = ./.;
             go = pkgs.go_1_26;
             vendorHash = null;
+            subPackages = [ "cmd/augur" ];
+            postInstall = ''
+              install -Dm644 ${./packaging/com.ch55secake.augur.plist} \
+                "$out/share/launchd/com.ch55secake.augur.plist"
+              install -Dm644 ${./config/augur.example.json} \
+                "$out/share/augur/config.example.json"
+              substituteInPlace "$out/share/launchd/com.ch55secake.augur.plist" \
+                --replace-fail /usr/local/bin/augur "$out/bin/augur"
+            '';
           };
         }
       );

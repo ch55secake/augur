@@ -1,11 +1,28 @@
 # augur
 ⚡️ Watch over active SSH connections and destroy
 
-Augur monitors established `sshd` connections on configured ports and terminates sessions whose remote network is not recognized. Network fingerprints are based on the remote address or CIDR and are not cryptographic device identity.
+Augur monitors established `sshd` connections on configured ports and terminates sessions whose authenticated SSH key is not recognized. SSH public-key fingerprints identify credentials, not physical hardware. Network settings can restrict where a recognized device is allowed to connect.
 
 ## Configuration
 
-Copy `config/augur.example.json` to `/etc/augur/config.json` and replace the example network with the networks that should be allowed. Enforcement is enabled by default; set `enforce` to `false` while testing.
+Copy `config/augur.example.json` to `/etc/augur/config.json` and replace the example fingerprint, username, and network with the values for the devices that should be allowed. A device with no `networks` restriction is allowed from any address; when `recognized_networks` is configured, devices without an explicit restriction are limited to those networks. Enforcement is enabled by default; set `enforce` to `false` while testing.
+
+Get an SSH public-key fingerprint with:
+
+```sh
+ssh-keygen -lf ~/.ssh/id_ed25519.pub -E sha256
+```
+
+Augur reads successful SSH authentication records from the root-controlled macOS unified log. Install the supplied managed drop-in before enabling enforcement:
+
+```sh
+sudo mkdir -p /etc/ssh/sshd_config.d
+sudo cp /path/to/000-augur.conf /etc/ssh/sshd_config.d/000-augur.conf
+sudo /usr/sbin/sshd -t
+sudo /usr/sbin/sshd -T | grep loglevel
+```
+
+The host's `/etc/ssh/sshd_config` must include `/etc/ssh/sshd_config.d/*` before any existing `LogLevel` directive, because OpenSSH uses the first value for each setting. Existing SSH sessions must reconnect after the setting is installed so their authentication is recorded for Augur. The Nix package provides the drop-in at `share/ssh/sshd_config.d/000-augur.conf`.
 
 Run a single audit scan without starting the service:
 
@@ -21,7 +38,7 @@ Build the binary and launchd artifact with Nix:
 nix build
 ```
 
-The outputs are available under `result/bin/augur`, `result/share/augur/config.example.json`, and `result/share/launchd/com.ch55secake.augur.plist`.
+The outputs are available under `result/bin/augur`, `result/share/augur/config.example.json`, `result/share/ssh/sshd_config.d/000-augur.conf`, and `result/share/launchd/com.ch55secake.augur.plist`.
 
 ## Development
 

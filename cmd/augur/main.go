@@ -42,8 +42,12 @@ func main() {
 
 	runner := monitor.ExecRunner{}
 	discoverer := monitor.NewLsofDiscoverer(runner, settings.SSHPorts)
-	enforcer := monitor.TreeTerminator{Processes: monitor.SystemProcessController{Runner: runner}}
+	enforcer := monitor.TreeTerminator{
+		Processes:   monitor.SystemProcessController{Runner: runner},
+		Connections: monitor.NewLsofConnectionVerifier(runner),
+	}
 	service := monitor.New(discoverer, enforcer, settings, logger)
+	service.IdentityResolver = monitor.NewSystemIdentityResolver(runner)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

@@ -12,6 +12,7 @@ func TestParse(t *testing.T) {
         "poll_interval": "2s",
         "ssh_ports": [22, 2222],
         "recognized_networks": [{"name": "lan", "cidr": "192.168.1.0/24"}],
+        "recognized_devices": [{"name": "laptop", "user": "501", "fingerprint": "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}],
         "enforce": true,
         "log_level": "debug"
     }`))
@@ -29,13 +30,56 @@ func TestParse(t *testing.T) {
 
 func TestParseDefaultsEnforce(t *testing.T) {
 	config, err := Parse([]byte(`{
-        "recognized_networks": [{"cidr": "10.0.0.0/8"}]
+		"recognized_networks": [{"cidr": "10.0.0.0/8"}],
+		"recognized_devices": [{"fingerprint": "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}]
     }`))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !config.Enforce {
 		t.Fatal("enforce defaulted to false")
+	}
+}
+
+func TestMatchDevice(t *testing.T) {
+	settings := Config{
+		Networks: []Network{{Name: "trusted", CIDR: "192.168.1.0/24"}},
+		Devices: []Device{{
+			Name:        "laptop",
+			User:        "501",
+			Fingerprint: "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+		}},
+	}
+
+	device, ok := settings.MatchDevice("501", []string{"SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}, mustAddr(t, "192.168.1.50"))
+	if !ok || device.Name != "laptop" {
+		t.Fatalf("device match = %#v, %t", device, ok)
+	}
+	if _, ok := settings.MatchDevice("502", []string{"SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}, mustAddr(t, "192.168.1.50")); ok {
+		t.Fatal("matched device for the wrong user")
+	}
+	if _, ok := settings.MatchDevice("501", []string{"SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}, mustAddr(t, "10.0.0.50")); ok {
+		t.Fatal("matched device outside the recognized network")
+	}
+}
+
+func TestMatchDeviceNetworkRestriction(t *testing.T) {
+	settings := Config{
+		Networks: []Network{
+			{Name: "lan", CIDR: "192.168.1.0/24"},
+			{Name: "vpn", CIDR: "10.0.0.0/8"},
+		},
+		Devices: []Device{{
+			Fingerprint: "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+			Networks:    []string{"vpn"},
+		}},
+	}
+
+	if _, ok := settings.MatchDevice("", []string{"SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}, mustAddr(t, "192.168.1.50")); ok {
+		t.Fatal("matched device outside its configured networks")
+	}
+	if _, ok := settings.MatchDevice("", []string{"SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}, mustAddr(t, "10.0.0.50")); !ok {
+		t.Fatal("did not match device in its configured network")
 	}
 }
 
@@ -46,24 +90,34 @@ func TestParseRejectsInvalidConfiguration(t *testing.T) {
 		want string
 	}{
 		{
-			name: "no networks",
-			data: `{"recognized_networks": []}`,
-			want: "recognized_networks",
+			name: "no devices",
+			data: `{"recognized_networks": [{"cidr": "10.0.0.0/8"}]}`,
+			want: "recognized_devices",
 		},
 		{
 			name: "invalid port",
-			data: `{"ssh_ports": [0], "recognized_networks": [{"cidr": "10.0.0.0/8"}]}`,
+			data: `{"ssh_ports": [0], "recognized_networks": [{"cidr": "10.0.0.0/8"}], "recognized_devices": [{"fingerprint": "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}]}`,
 			want: "outside the valid range",
 		},
 		{
 			name: "unknown field",
-			data: `{"recognized_networks": [{"cidr": "10.0.0.0/8"}], "unknown": true}`,
+			data: `{"recognized_networks": [{"cidr": "10.0.0.0/8"}], "recognized_devices": [{"fingerprint": "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}], "unknown": true}`,
 			want: "unknown field",
 		},
 		{
 			name: "trailing data",
-			data: `{"recognized_networks": [{"cidr": "10.0.0.0/8"}]} true`,
+			data: `{"recognized_networks": [{"cidr": "10.0.0.0/8"}], "recognized_devices": [{"fingerprint": "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}]} true`,
 			want: "more than one",
+		},
+		{
+			name: "invalid fingerprint",
+			data: `{"recognized_devices": [{"fingerprint": "ssh-ed25519"}]}`,
+			want: "SHA256 SSH fingerprint",
+		},
+		{
+			name: "unknown device network",
+			data: `{"recognized_networks": [{"name": "lan", "cidr": "10.0.0.0/8"}], "recognized_devices": [{"fingerprint": "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", "networks": ["vpn"]}]}`,
+			want: "is not defined",
 		},
 	}
 

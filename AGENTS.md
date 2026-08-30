@@ -5,6 +5,7 @@
 - This is the Go module `github.com/ch55secake/augur`, targeting Go `1.26.5`.
 - The intended program is a launchd service that watches active SSH connections and terminates unrecognized ones.
 - The executable entrypoint is `cmd/augur`; connection discovery, enforcement, and orchestration live under `internal/monitor`, and JSON configuration lives under `internal/config`.
+- SSH device recognition uses public-key fingerprints from root-controlled OpenSSH verbose authentication logs; missing or non-key authentication is unrecognized.
 - `packaging/com.ch55secake.augur.plist` is a root LaunchDaemon definition; it is not a per-user LaunchAgent.
 
 ## Verification

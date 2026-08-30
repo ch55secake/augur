@@ -26,6 +26,40 @@ type LsofDiscoverer struct {
 	Ports  map[int]struct{}
 }
 
+type LsofConnectionVerifier struct {
+	Runner CommandRunner
+}
+
+func NewLsofConnectionVerifier(runner CommandRunner) LsofConnectionVerifier {
+	return LsofConnectionVerifier{Runner: runner}
+}
+
+func (v LsofConnectionVerifier) Verify(ctx context.Context, expected Connection) (bool, error) {
+	if v.Runner == nil {
+		return false, errors.New("lsof connection verifier has no command runner")
+	}
+
+	output, err := v.Runner.Run(ctx, "lsof", "-nP", "-a", "-p", strconv.Itoa(expected.PID), "-iTCP", "-sTCP:ESTABLISHED", "-FpLcunT")
+	if err != nil {
+		var exitError *exec.ExitError
+		if errors.As(err, &exitError) && exitError.ExitCode() == 1 && len(strings.TrimSpace(string(output))) == 0 {
+			return false, nil
+		}
+		return false, fmt.Errorf("run lsof connection verification: %w", err)
+	}
+
+	connections, err := ParseLsofOutput(output, nil)
+	if err != nil {
+		return false, err
+	}
+	for _, connection := range connections {
+		if connection.PID == expected.PID && connection.Local == expected.Local && connection.Remote == expected.Remote {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 func NewLsofDiscoverer(runner CommandRunner, ports []int) LsofDiscoverer {
 	portSet := make(map[int]struct{}, len(ports))
 	for _, port := range ports {
@@ -39,7 +73,7 @@ func (d LsofDiscoverer) Discover(ctx context.Context) ([]Connection, error) {
 		return nil, fmt.Errorf("lsof discoverer has no command runner")
 	}
 
-	output, err := d.Runner.Run(ctx, "lsof", "-nP", "-a", "-c", "sshd", "-iTCP", "-sTCP:ESTABLISHED", "-FpcunT")
+	output, err := d.Runner.Run(ctx, "lsof", "-nP", "-a", "-c", "sshd", "-iTCP", "-sTCP:ESTABLISHED", "-FpLcunT")
 	if err != nil {
 		var exitError *exec.ExitError
 		if errors.As(err, &exitError) && exitError.ExitCode() == 1 && len(strings.TrimSpace(string(output))) == 0 {
@@ -68,7 +102,7 @@ func ParseLsofOutput(data []byte, ports map[int]struct{}) ([]Connection, error) 
 		if record.pid == 0 {
 			return nil
 		}
-		if record.command != "sshd" || (record.hasState && !record.established) {
+		if !isSSHDaemonCommand(record.command) || (record.hasState && !record.established) {
 			record = lsofRecord{}
 			return nil
 		}
@@ -124,6 +158,10 @@ func ParseLsofOutput(data []byte, ports map[int]struct{}) ([]Connection, error) 
 		case 'c':
 			record.command = value
 		case 'u':
+			if record.user == "" {
+				record.user = value
+			}
+		case 'L':
 			record.user = value
 		case 'n':
 			record.names = append(record.names, value)

@@ -7,6 +7,15 @@
       "cidr": "192.168.1.0/24"
     }
   ],
+  "probe_networks": ["trusted-lan"],
+  "network_probes": {
+    "enabled": false,
+    "interval": "30s",
+    "timeout": "500ms",
+    "concurrency": 32,
+    "max_hosts": 1024,
+    "tcp_ports": [22, 80, 443]
+  },
   "recognized_devices": [
     {
       "name": "my-mac",

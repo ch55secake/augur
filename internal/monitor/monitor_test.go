@@ -3,7 +3,9 @@ package monitor
 import (
 	"bytes"
 	"context"
+	"errors"
 	"log/slog"
+	"net/netip"
 	"strings"
 	"testing"
 
@@ -90,6 +92,63 @@ func TestScanResolvesSSHIdentityBeforeMatching(t *testing.T) {
 	}
 }
 
+func TestScanCachesNetworkInventoryWithoutChangingSSHEnforcement(t *testing.T) {
+	settings := config.Default()
+	settings.Networks = []config.Network{{Name: "lan", CIDR: "192.168.1.0/24"}}
+	settings.ProbeNetworks = []string{"lan"}
+	settings.NetworkProbes.Enabled = true
+	settings.Enforce = false
+	prober := &fakeNetworkProber{observations: []NetworkObservation{{Address: mustAddr(t, "192.168.1.50")}}}
+	service := New(
+		fakeDiscoverer{},
+		&recordingEnforcer{},
+		settings,
+		slog.Default(),
+	)
+	service.NetworkProber = prober
+
+	if err := service.Scan(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := service.NetworkInventory(); len(got) != 1 || got[0].Address != mustAddr(t, "192.168.1.50") {
+		t.Fatalf("network inventory = %#v", got)
+	}
+	if err := service.Scan(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if prober.calls != 1 {
+		t.Fatalf("probe calls = %d, want one within the probe interval", prober.calls)
+	}
+}
+
+func TestScanContinuesSSHEnforcementWhenNetworkProbeFails(t *testing.T) {
+	settings := config.Default()
+	settings.Networks = []config.Network{{Name: "lan", CIDR: "192.168.1.0/24"}}
+	settings.ProbeNetworks = []string{"lan"}
+	settings.NetworkProbes.Enabled = true
+	settings.Enforce = true
+	enforcer := &recordingEnforcer{}
+	service := New(
+		fakeDiscoverer{connections: []Connection{{
+			PID:    101,
+			Local:  mustAddrPort(t, "192.168.1.109:22"),
+			Remote: mustAddrPort(t, "192.168.1.50:50001"),
+			State:  "ESTABLISHED",
+		}}},
+		enforcer,
+		settings,
+		slog.Default(),
+	)
+	service.NetworkProber = &fakeNetworkProber{err: errors.New("probe unavailable")}
+
+	if err := service.Scan(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(enforcer.pids) != 1 || enforcer.pids[0] != 101 {
+		t.Fatalf("terminated PIDs = %v, want [101]", enforcer.pids)
+	}
+}
+
 type fakeDiscoverer struct {
 	connections []Connection
 	err         error
@@ -115,4 +174,15 @@ type fakeIdentityResolver struct {
 
 func (r fakeIdentityResolver) Resolve(context.Context, Connection) (SSHIdentity, error) {
 	return r.identity, r.err
+}
+
+type fakeNetworkProber struct {
+	observations []NetworkObservation
+	err          error
+	calls        int
+}
+
+func (p *fakeNetworkProber) Probe(_ context.Context, _ []netip.Prefix, _ config.NetworkProbeConfig) ([]NetworkObservation, error) {
+	p.calls++
+	return p.observations, p.err
 }

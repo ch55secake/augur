@@ -21,9 +21,13 @@ type Monitor struct {
 	Discoverer       Discoverer
 	Enforcer         Enforcer
 	IdentityResolver IdentityResolver
+	NetworkProber    NetworkProber
 	Config           config.Config
 	Logger           *slog.Logger
 	terminated       map[string]struct{}
+	inventory        []NetworkObservation
+	inventoryExpires time.Time
+	nextProbe        time.Time
 }
 
 func New(discoverer Discoverer, enforcer Enforcer, settings config.Config, logger *slog.Logger) *Monitor {
@@ -64,6 +68,7 @@ func (m *Monitor) Scan(ctx context.Context) error {
 	if m.Discoverer == nil {
 		return &missingDependencyError{name: "discoverer"}
 	}
+	m.scanNetworkInventory(ctx)
 
 	connections, err := m.Discoverer.Discover(ctx)
 	if err != nil {
@@ -127,6 +132,48 @@ func (m *Monitor) Scan(ctx context.Context) error {
 	}
 	return nil
 }
+
+func (m *Monitor) scanNetworkInventory(ctx context.Context) {
+	if !m.Config.NetworkProbes.Enabled {
+		return
+	}
+	now := time.Now()
+	if !m.nextProbe.IsZero() && now.Before(m.nextProbe) {
+		return
+	}
+	m.nextProbe = now.Add(m.Config.NetworkProbes.Interval.Duration)
+	if m.NetworkProber == nil {
+		m.Logger.Error("scan network inventory", "error", "monitor has no network prober")
+		return
+	}
+
+	prefixes, err := m.Config.ProbePrefixes()
+	if err != nil {
+		m.Logger.Error("load network probe targets", "error", err)
+		return
+	}
+	observations, err := m.NetworkProber.Probe(ctx, prefixes, m.Config.NetworkProbes)
+	if err != nil {
+		m.Logger.Error("scan network inventory", "error", err)
+		return
+	}
+	m.inventory = append(m.inventory[:0], observations...)
+	m.inventoryExpires = now.Add(2 * m.Config.NetworkProbes.Interval.Duration)
+	m.Logger.Info("network inventory updated", "observations", len(observations), "devices", observations)
+}
+
+func (m *Monitor) NetworkInventory() []NetworkObservation {
+	if m.inventoryExpires.IsZero() || !time.Now().Before(m.inventoryExpires) {
+		return nil
+	}
+	inventory := append([]NetworkObservation(nil), m.inventory...)
+	for index := range inventory {
+		inventory[index].OpenPorts = append([]int(nil), inventory[index].OpenPorts...)
+	}
+	return inventory
+}
+
+var _ NetworkProber = (*SystemNetworkProber)(nil)
 
 type missingDependencyError struct {
 	name string

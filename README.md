@@ -3,6 +3,14 @@
 
 Augur monitors established `sshd` connections on configured ports and terminates sessions whose authenticated SSH key is not recognized. SSH public-key fingerprints identify credentials, not physical hardware. Network settings can restrict where a recognized device is allowed to connect.
 
+## Network Inventory
+
+Network inventory is disabled by default. To enable audit-only inventory, list the names of private or link-local networks to scan in `probe_networks` and set `network_probes.enabled` to `true`. The names must refer to entries in `recognized_networks`; unnamed networks cannot be probed.
+
+Each scan reads the macOS ARP and NDP neighbor caches, then performs bounded TCP connect probes against the configured `tcp_ports`. `max_hosts`, `concurrency`, `timeout`, and `interval` limit scan size and traffic. Results are short-lived in-memory observations and structured audit logs; they do not recognize devices, terminate SSH sessions, or change PF rules.
+
+The TCP results indicate reachability only. They are not an OS fingerprint or a cryptographic device identity. Keep SSH key fingerprints as the admission decision.
+
 ## Configuration
 
 Copy `config/augur.example.json` to `/etc/augur/config.json` and replace the example fingerprint, username, and network with the values for the devices that should be allowed. A device with no `networks` restriction is allowed from any address; when `recognized_networks` is configured, devices without an explicit restriction are limited to those networks. Enforcement is enabled by default; set `enforce` to `false` while testing.

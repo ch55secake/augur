@@ -51,22 +51,40 @@ type Device struct {
 	Networks    []string `json:"networks,omitempty"`
 }
 
+type NetworkProbeConfig struct {
+	Enabled     bool     `json:"enabled"`
+	Interval    Duration `json:"interval"`
+	Timeout     Duration `json:"timeout"`
+	Concurrency int      `json:"concurrency"`
+	MaxHosts    int      `json:"max_hosts"`
+	TCPPorts    []int    `json:"tcp_ports"`
+}
+
 type Config struct {
-	PollInterval Duration  `json:"poll_interval"`
-	SSHPorts     []int     `json:"ssh_ports"`
-	Networks     []Network `json:"recognized_networks"`
-	Devices      []Device  `json:"recognized_devices"`
-	Enforce      bool      `json:"enforce"`
-	LogPath      string    `json:"log_path,omitempty"`
-	LogLevel     string    `json:"log_level,omitempty"`
+	PollInterval  Duration           `json:"poll_interval"`
+	SSHPorts      []int              `json:"ssh_ports"`
+	Networks      []Network          `json:"recognized_networks"`
+	ProbeNetworks []string           `json:"probe_networks,omitempty"`
+	NetworkProbes NetworkProbeConfig `json:"network_probes,omitempty"`
+	Devices       []Device           `json:"recognized_devices"`
+	Enforce       bool               `json:"enforce"`
+	LogPath       string             `json:"log_path,omitempty"`
+	LogLevel      string             `json:"log_level,omitempty"`
 }
 
 func Default() Config {
 	return Config{
 		PollInterval: Duration{Duration: time.Second},
 		SSHPorts:     []int{22},
-		Enforce:      true,
-		LogLevel:     "info",
+		NetworkProbes: NetworkProbeConfig{
+			Interval:    Duration{Duration: 30 * time.Second},
+			Timeout:     Duration{Duration: 500 * time.Millisecond},
+			Concurrency: 32,
+			MaxHosts:    1024,
+			TCPPorts:    []int{22, 80, 443},
+		},
+		Enforce:  true,
+		LogLevel: "info",
 	}
 }
 
@@ -131,8 +149,10 @@ func (c Config) Validate() error {
 	}
 
 	networkNames := make(map[string]struct{}, len(c.Networks))
+	networkPrefixes := make(map[string]netip.Prefix, len(c.Networks))
 	for index, network := range c.Networks {
-		if _, err := ParsePrefix(network.CIDR); err != nil {
+		prefix, err := ParsePrefix(network.CIDR)
+		if err != nil {
 			return fmt.Errorf("recognized_networks[%d]: %w", index, err)
 		}
 		if network.Name == "" {
@@ -142,6 +162,11 @@ func (c Config) Validate() error {
 			return fmt.Errorf("recognized_networks[%d]: network name %q is duplicated", index, network.Name)
 		}
 		networkNames[network.Name] = struct{}{}
+		networkPrefixes[network.Name] = prefix
+	}
+
+	if err := validateProbeConfig(c, networkNames, networkPrefixes); err != nil {
+		return err
 	}
 
 	if len(c.Devices) == 0 {
@@ -168,6 +193,102 @@ func (c Config) Validate() error {
 	}
 
 	return nil
+}
+
+func validateProbeConfig(c Config, networkNames map[string]struct{}, networkPrefixes map[string]netip.Prefix) error {
+	for index, name := range c.ProbeNetworks {
+		if strings.TrimSpace(name) == "" {
+			return fmt.Errorf("probe_networks[%d]: network name is empty", index)
+		}
+		if _, exists := networkNames[name]; !exists {
+			return fmt.Errorf("probe_networks[%d]: network %q is not defined", index, name)
+		}
+	}
+
+	settings := c.NetworkProbes
+	if !settings.Enabled {
+		return nil
+	}
+	if len(c.ProbeNetworks) == 0 {
+		return errors.New("probe_networks must contain at least one network when network probes are enabled")
+	}
+	if settings.Interval.Duration <= 0 {
+		return errors.New("network_probes.interval must be greater than zero")
+	}
+	if settings.Timeout.Duration <= 0 {
+		return errors.New("network_probes.timeout must be greater than zero")
+	}
+	if settings.Concurrency < 1 || settings.Concurrency > 1024 {
+		return errors.New("network_probes.concurrency must be between 1 and 1024")
+	}
+	if settings.MaxHosts < 1 || settings.MaxHosts > 65536 {
+		return errors.New("network_probes.max_hosts must be between 1 and 65536")
+	}
+	if len(settings.TCPPorts) == 0 {
+		return errors.New("network_probes.tcp_ports must contain at least one port")
+	}
+
+	seenPorts := make(map[int]struct{}, len(settings.TCPPorts))
+	for _, port := range settings.TCPPorts {
+		if port < 1 || port > 65535 {
+			return fmt.Errorf("network probe port %d is outside the valid range", port)
+		}
+		if _, exists := seenPorts[port]; exists {
+			return fmt.Errorf("network probe port %d is duplicated", port)
+		}
+		seenPorts[port] = struct{}{}
+	}
+
+	seenNetworks := make(map[string]struct{}, len(c.ProbeNetworks))
+	for _, name := range c.ProbeNetworks {
+		if _, exists := seenNetworks[name]; exists {
+			return fmt.Errorf("probe network %q is duplicated", name)
+		}
+		seenNetworks[name] = struct{}{}
+
+		prefix := networkPrefixes[name]
+		if !prefix.Addr().IsPrivate() && !prefix.Addr().IsLinkLocalUnicast() {
+			return fmt.Errorf("probe network %q must be private or link-local", name)
+		}
+		if prefixHostCount(prefix, settings.MaxHosts) > settings.MaxHosts {
+			return fmt.Errorf("probe network %q contains more than %d hosts", name, settings.MaxHosts)
+		}
+	}
+
+	return nil
+}
+
+func prefixHostCount(prefix netip.Prefix, limit int) int {
+	hostBits := prefix.Addr().BitLen() - prefix.Bits()
+	if hostBits >= 63 {
+		return limit + 1
+	}
+	count := uint64(1) << uint(hostBits)
+	if count > uint64(limit) {
+		return limit + 1
+	}
+	return int(count)
+}
+
+func (c Config) ProbePrefixes() ([]netip.Prefix, error) {
+	prefixes := make([]netip.Prefix, 0, len(c.ProbeNetworks))
+	for _, name := range c.ProbeNetworks {
+		for _, network := range c.Networks {
+			if network.Name != name {
+				continue
+			}
+			prefix, err := ParsePrefix(network.CIDR)
+			if err != nil {
+				return nil, fmt.Errorf("probe network %q: %w", name, err)
+			}
+			prefixes = append(prefixes, prefix)
+			break
+		}
+	}
+	if len(prefixes) != len(c.ProbeNetworks) {
+		return nil, errors.New("probe network configuration contains an undefined network")
+	}
+	return prefixes, nil
 }
 
 func ParsePrefix(value string) (netip.Prefix, error) {

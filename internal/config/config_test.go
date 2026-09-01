@@ -12,6 +12,8 @@ func TestParse(t *testing.T) {
         "poll_interval": "2s",
         "ssh_ports": [22, 2222],
         "recognized_networks": [{"name": "lan", "cidr": "192.168.1.0/24"}],
+		"probe_networks": ["lan"],
+		"network_probes": {"enabled": true, "interval": "30s", "timeout": "500ms", "concurrency": 8, "max_hosts": 256, "tcp_ports": [22, 443]},
         "recognized_devices": [{"name": "laptop", "user": "501", "fingerprint": "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}],
         "enforce": true,
         "log_level": "debug"
@@ -25,6 +27,13 @@ func TestParse(t *testing.T) {
 	}
 	if network, ok := config.MatchNetwork(mustAddr(t, "192.168.1.109")); !ok || network.Name != "lan" {
 		t.Fatalf("network match = %#v, %t", network, ok)
+	}
+	prefixes, err := config.ProbePrefixes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(prefixes) != 1 || prefixes[0].String() != "192.168.1.0/24" {
+		t.Fatalf("probe prefixes = %v", prefixes)
 	}
 }
 
@@ -118,6 +127,31 @@ func TestParseRejectsInvalidConfiguration(t *testing.T) {
 			name: "unknown device network",
 			data: `{"recognized_networks": [{"name": "lan", "cidr": "10.0.0.0/8"}], "recognized_devices": [{"fingerprint": "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", "networks": ["vpn"]}]}`,
 			want: "is not defined",
+		},
+		{
+			name: "enabled probes without targets",
+			data: `{"recognized_networks": [{"name": "lan", "cidr": "10.0.0.0/24"}], "network_probes": {"enabled": true}}`,
+			want: "probe_networks must contain",
+		},
+		{
+			name: "probe target must be defined",
+			data: `{"recognized_networks": [{"name": "lan", "cidr": "10.0.0.0/24"}], "probe_networks": ["vpn"]}`,
+			want: "is not defined",
+		},
+		{
+			name: "probe target must be private",
+			data: `{"recognized_networks": [{"name": "wan", "cidr": "203.0.113.0/24"}], "probe_networks": ["wan"], "network_probes": {"enabled": true}}`,
+			want: "private or link-local",
+		},
+		{
+			name: "probe target is bounded",
+			data: `{"recognized_networks": [{"name": "lan", "cidr": "10.0.0.0/8"}], "probe_networks": ["lan"], "network_probes": {"enabled": true}}`,
+			want: "more than",
+		},
+		{
+			name: "probe port is invalid",
+			data: `{"recognized_networks": [{"name": "lan", "cidr": "10.0.0.0/24"}], "probe_networks": ["lan"], "network_probes": {"enabled": true, "tcp_ports": [0]}}`,
+			want: "outside the valid range",
 		},
 	}
 

@@ -1,0 +1,19 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    uses: ch55secake/cheesecake-factory/.github/workflows/release.yml@main
+    with:
+      binary-name: augur
+      build-package: ./cmd/augur
+      cgo-enabled: '0'
+      targets: '[{"goos":"linux","goarch":"amd64"},{"goos":"linux","goarch":"arm64"},{"goos":"darwin","goarch":"arm64"}]'
+      version: 1.0.0
+      ldflags: "-s -w"

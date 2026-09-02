@@ -48,7 +48,9 @@ func main() {
 	}
 	service := monitor.New(discoverer, enforcer, settings, logger)
 	service.IdentityResolver = monitor.NewSystemIdentityResolver(runner)
-	service.NetworkProber = monitor.NewSystemNetworkProber(runner)
+	networkProber := monitor.NewSystemNetworkProber(runner)
+	networkProber.Logger = logger
+	service.NetworkProber = networkProber
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

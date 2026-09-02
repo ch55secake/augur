@@ -111,6 +111,93 @@ func TestSystemNetworkProberCombinesNeighborsAndOpenPorts(t *testing.T) {
 	}
 }
 
+func TestSystemNetworkProberAddsNmapOSFingerprint(t *testing.T) {
+	runner := &probeRunner{outputs: map[string][][]byte{
+		"/usr/sbin/arp": {
+			[]byte("? (192.168.1.2) at 66:77:88:99:aa:bb on en0 ifscope [ethernet]\n"),
+			[]byte("? (192.168.1.2) at 66:77:88:99:aa:bb on en0 ifscope [ethernet]\n"),
+		},
+		"/usr/sbin/ndp": {[]byte{}, []byte{}},
+		"nmap": {[]byte(`<?xml version="1.0"?>
+<nmaprun>
+  <host>
+    <address addr="192.168.1.2" addrtype="ipv4"/>
+    <os>
+      <osmatch name="Apple macOS 14.0" accuracy="96">
+        <osclass vendor="Apple" osfamily="Mac OS X" osgen="14.X" accuracy="97">
+          <cpe>cpe:/o:apple:mac_os_x:14</cpe>
+        </osclass>
+      </osmatch>
+    </os>
+  </host>
+</nmaprun>`)},
+	}}
+	dialer := &probeDialer{open: map[string]bool{"192.168.1.2:22": true}}
+	prober := &SystemNetworkProber{Runner: runner, Dialer: dialer}
+	prefix, err := netip.ParsePrefix("192.168.1.0/30")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	observations, err := prober.Probe(context.Background(), []netip.Prefix{prefix}, config.NetworkProbeConfig{
+		Enabled:     true,
+		Timeout:     config.Duration{Duration: time.Second},
+		Concurrency: 1,
+		MaxHosts:    4,
+		TCPPorts:    []int{80, 22},
+		OSDetection: config.OSDetectionConfig{Enabled: true, Binary: "nmap", Timeout: config.Duration{Duration: time.Second}, MaxHosts: 1},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(observations) != 1 || observations[0].OS == nil {
+		t.Fatalf("observations = %#v, want one OS fingerprint", observations)
+	}
+	got := observations[0].OS
+	if got.Name != "Apple macOS 14.0" || got.Accuracy != 97 || got.Vendor != "Apple" || got.Family != "Mac OS X" || got.Generation != "14.X" || !reflect.DeepEqual(got.CPEs, []string{"cpe:/o:apple:mac_os_x:14"}) {
+		t.Fatalf("OS fingerprint = %#v", got)
+	}
+	args := strings.Join(runner.args["nmap"], " ")
+	for _, want := range []string{"-O", "--osscan-limit", "--max-os-tries 1", "-oX -", "-p 22,80", "192.168.1.2"} {
+		if !strings.Contains(args, want) {
+			t.Fatalf("nmap args = %q, missing %q", args, want)
+		}
+	}
+}
+
+func TestSystemNetworkProberKeepsInventoryWhenNmapFails(t *testing.T) {
+	runner := &probeRunner{
+		outputs: map[string][][]byte{
+			"/usr/sbin/arp": {
+				[]byte("? (192.168.1.2) at 66:77:88:99:aa:bb on en0 ifscope [ethernet]\n"),
+				[]byte("? (192.168.1.2) at 66:77:88:99:aa:bb on en0 ifscope [ethernet]\n"),
+			},
+			"/usr/sbin/ndp": {[]byte{}, []byte{}},
+		},
+		errors: map[string]error{"nmap": errors.New("nmap not installed")},
+	}
+	prober := &SystemNetworkProber{Runner: runner, Dialer: &probeDialer{open: map[string]bool{"192.168.1.2:22": true}}}
+	prefix, err := netip.ParsePrefix("192.168.1.0/30")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	observations, err := prober.Probe(context.Background(), []netip.Prefix{prefix}, config.NetworkProbeConfig{
+		Enabled:     true,
+		Timeout:     config.Duration{Duration: time.Second},
+		Concurrency: 1,
+		MaxHosts:    4,
+		TCPPorts:    []int{22},
+		OSDetection: config.OSDetectionConfig{Enabled: true, Binary: "nmap", Timeout: config.Duration{Duration: time.Second}, MaxHosts: 1},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(observations) != 1 || observations[0].OS != nil || len(observations[0].OpenPorts) != 1 {
+		t.Fatalf("observations = %#v, want base inventory without OS data", observations)
+	}
+}
+
 func TestSystemNetworkProberReturnsContextError(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -167,15 +254,24 @@ func TestSystemNetworkProberRejectsOffLinkNetwork(t *testing.T) {
 
 type probeRunner struct {
 	outputs map[string][][]byte
+	errors  map[string]error
 	calls   map[string]int
+	args    map[string][]string
 }
 
-func (r *probeRunner) Run(_ context.Context, name string, _ ...string) ([]byte, error) {
+func (r *probeRunner) Run(_ context.Context, name string, args ...string) ([]byte, error) {
 	if r.calls == nil {
 		r.calls = make(map[string]int)
 	}
+	if r.args == nil {
+		r.args = make(map[string][]string)
+	}
+	r.args[name] = append([]string(nil), args...)
 	index := r.calls[name]
 	r.calls[name]++
+	if err := r.errors[name]; err != nil {
+		return nil, err
+	}
 	outputs := r.outputs[name]
 	if index >= len(outputs) {
 		return nil, nil

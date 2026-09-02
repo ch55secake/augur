@@ -14,7 +14,13 @@
     "timeout": "500ms",
     "concurrency": 32,
     "max_hosts": 1024,
-    "tcp_ports": [22, 80, 443]
+    "tcp_ports": [22, 80, 443],
+    "os_detection": {
+      "enabled": false,
+      "binary": "nmap",
+      "timeout": "30s",
+      "max_hosts": 32
+    }
   },
   "recognized_devices": [
     {

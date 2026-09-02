@@ -13,7 +13,7 @@ func TestParse(t *testing.T) {
         "ssh_ports": [22, 2222],
         "recognized_networks": [{"name": "lan", "cidr": "192.168.1.0/24"}],
 		"probe_networks": ["lan"],
-		"network_probes": {"enabled": true, "interval": "30s", "timeout": "500ms", "concurrency": 8, "max_hosts": 256, "tcp_ports": [22, 443]},
+		"network_probes": {"enabled": true, "interval": "30s", "timeout": "500ms", "concurrency": 8, "max_hosts": 256, "tcp_ports": [22, 443], "os_detection": {"enabled": true, "binary": "nmap", "timeout": "20s", "max_hosts": 2}},
         "recognized_devices": [{"name": "laptop", "user": "501", "fingerprint": "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}],
         "enforce": true,
         "log_level": "debug"
@@ -34,6 +34,9 @@ func TestParse(t *testing.T) {
 	}
 	if len(prefixes) != 1 || prefixes[0].String() != "192.168.1.0/24" {
 		t.Fatalf("probe prefixes = %v", prefixes)
+	}
+	if config.NetworkProbes.OSDetection.Timeout.Duration != 20*time.Second || config.NetworkProbes.OSDetection.MaxHosts != 2 {
+		t.Fatalf("OS detection config = %#v", config.NetworkProbes.OSDetection)
 	}
 }
 
@@ -152,6 +155,16 @@ func TestParseRejectsInvalidConfiguration(t *testing.T) {
 			name: "probe port is invalid",
 			data: `{"recognized_networks": [{"name": "lan", "cidr": "10.0.0.0/24"}], "probe_networks": ["lan"], "network_probes": {"enabled": true, "tcp_ports": [0]}}`,
 			want: "outside the valid range",
+		},
+		{
+			name: "OS detection requires probes",
+			data: `{"recognized_networks": [{"name": "lan", "cidr": "10.0.0.0/24"}], "probe_networks": ["lan"], "network_probes": {"os_detection": {"enabled": true}}}`,
+			want: "requires network_probes.enabled",
+		},
+		{
+			name: "OS detection host limit is bounded",
+			data: `{"recognized_networks": [{"name": "lan", "cidr": "10.0.0.0/24"}], "probe_networks": ["lan"], "network_probes": {"enabled": true, "os_detection": {"enabled": true, "max_hosts": 2048}}}`,
+			want: "between 1 and 1024",
 		},
 	}
 

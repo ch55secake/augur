@@ -9,7 +9,9 @@ Network inventory is disabled by default. To enable audit-only inventory, list t
 
 Each scan reads the macOS ARP and NDP neighbor caches, then performs bounded TCP connect probes against the configured `tcp_ports`. `max_hosts`, `concurrency`, `timeout`, and `interval` limit scan size and traffic. Results are short-lived in-memory observations and structured audit logs; they do not recognize devices, terminate SSH sessions, or change PF rules.
 
-The TCP results indicate reachability only. They are not an OS fingerprint or a cryptographic device identity. Keep SSH key fingerprints as the admission decision.
+Optional OS enrichment uses an explicitly configured `nmap -O` binary against only hosts where a TCP probe succeeded. Set `network_probes.os_detection.enabled` to `true`, provide the binary path or name, and keep `max_hosts` small. Augur requests XML output, limits retries, and applies the configured command timeout. Nmap must be installed separately and may require root privileges for OS detection; an unavailable or failed Nmap run leaves the base inventory intact and is logged as a warning.
+
+TCP and OS results are heuristic observations, not cryptographic device identities. Keep SSH key fingerprints as the admission decision.
 
 ## Configuration
 

@@ -3,8 +3,10 @@ package monitor
 import (
 	"bufio"
 	"context"
+	"encoding/xml"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/netip"
 	"os/exec"
@@ -17,11 +19,21 @@ import (
 )
 
 type NetworkObservation struct {
-	Address    netip.Addr `json:"address"`
-	MAC        string     `json:"mac,omitempty"`
-	Interface  string     `json:"interface,omitempty"`
-	OpenPorts  []int      `json:"open_ports,omitempty"`
-	ObservedAt time.Time  `json:"observed_at"`
+	Address    netip.Addr     `json:"address"`
+	MAC        string         `json:"mac,omitempty"`
+	Interface  string         `json:"interface,omitempty"`
+	OpenPorts  []int          `json:"open_ports,omitempty"`
+	OS         *OSFingerprint `json:"os,omitempty"`
+	ObservedAt time.Time      `json:"observed_at"`
+}
+
+type OSFingerprint struct {
+	Name       string   `json:"name"`
+	Accuracy   int      `json:"accuracy,omitempty"`
+	Vendor     string   `json:"vendor,omitempty"`
+	Family     string   `json:"family,omitempty"`
+	Generation string   `json:"generation,omitempty"`
+	CPEs       []string `json:"cpes,omitempty"`
 }
 
 type NetworkProber interface {
@@ -36,6 +48,7 @@ type SystemNetworkProber struct {
 	Runner        CommandRunner
 	Dialer        NetworkDialer
 	LocalPrefixes func() ([]netip.Prefix, error)
+	Logger        *slog.Logger
 	Now           func() time.Time
 }
 
@@ -44,6 +57,7 @@ func NewSystemNetworkProber(runner CommandRunner) *SystemNetworkProber {
 		Runner:        runner,
 		Dialer:        &net.Dialer{},
 		LocalPrefixes: localInterfacePrefixes,
+		Logger:        slog.Default(),
 		Now:           time.Now,
 	}
 }
@@ -99,7 +113,172 @@ func (p *SystemNetworkProber) Probe(ctx context.Context, prefixes []netip.Prefix
 	if p.Now != nil {
 		observedAt = p.Now()
 	}
-	return combineObservations(prefixes, before, after, openPorts, observedAt), nil
+	observations := combineObservations(prefixes, before, after, openPorts, observedAt)
+	if settings.OSDetection.Enabled {
+		if err := p.enrichOS(ctx, observations, settings); err != nil {
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			if p.Logger != nil {
+				p.Logger.Warn("network OS fingerprinting unavailable", "error", err)
+			}
+		}
+	}
+	return observations, nil
+}
+
+func (p *SystemNetworkProber) enrichOS(ctx context.Context, observations []NetworkObservation, settings config.NetworkProbeConfig) error {
+	if strings.TrimSpace(settings.OSDetection.Binary) == "" {
+		return errors.New("network OS fingerprinting binary is empty")
+	}
+	if settings.OSDetection.Timeout.Duration <= 0 {
+		return errors.New("network OS fingerprinting timeout must be greater than zero")
+	}
+	maxHosts := settings.OSDetection.MaxHosts
+	if maxHosts <= 0 {
+		return errors.New("network OS fingerprinting max hosts must be greater than zero")
+	}
+
+	addresses := make([]netip.Addr, 0, maxHosts)
+	for _, observation := range observations {
+		if len(observation.OpenPorts) == 0 {
+			continue
+		}
+		addresses = append(addresses, observation.Address)
+		if len(addresses) == maxHosts {
+			break
+		}
+	}
+	if len(addresses) == 0 {
+		return nil
+	}
+
+	ports := append([]int(nil), settings.TCPPorts...)
+	sort.Ints(ports)
+	portNames := make([]string, len(ports))
+	for index, port := range ports {
+		portNames[index] = strconv.Itoa(port)
+	}
+	targets := make([]string, len(addresses))
+	for index, address := range addresses {
+		targets[index] = address.String()
+	}
+	args := []string{
+		"-n",
+		"-Pn",
+		"-O",
+		"--osscan-limit",
+		"--max-os-tries",
+		"1",
+		"--max-retries",
+		"1",
+		"--host-timeout",
+		settings.OSDetection.Timeout.String(),
+		"-oX",
+		"-",
+		"-p",
+		strings.Join(portNames, ","),
+	}
+	args = append(args, targets...)
+
+	probeContext, cancel := context.WithTimeout(ctx, settings.OSDetection.Timeout.Duration)
+	defer cancel()
+	output, err := p.Runner.Run(probeContext, settings.OSDetection.Binary, args...)
+	if err != nil {
+		return fmt.Errorf("run OS fingerprinting command: %w", err)
+	}
+	fingerprints, err := parseNmapXML(output)
+	if err != nil {
+		return fmt.Errorf("parse OS fingerprinting output: %w", err)
+	}
+	for index := range observations {
+		fingerprint, ok := fingerprints[observations[index].Address.Unmap()]
+		if ok {
+			fingerprint.CPEs = append([]string(nil), fingerprint.CPEs...)
+			observations[index].OS = &fingerprint
+		}
+	}
+	return nil
+}
+
+type nmapRun struct {
+	Hosts []nmapHost `xml:"host"`
+}
+
+type nmapHost struct {
+	Addresses []nmapAddress `xml:"address"`
+	OS        *nmapOS       `xml:"os"`
+}
+
+type nmapAddress struct {
+	Address string `xml:"addr,attr"`
+}
+
+type nmapOS struct {
+	Matches []nmapOSMatch `xml:"osmatch"`
+}
+
+type nmapOSMatch struct {
+	Name     string        `xml:"name,attr"`
+	Accuracy string        `xml:"accuracy,attr"`
+	Classes  []nmapOSClass `xml:"osclass"`
+}
+
+type nmapOSClass struct {
+	Vendor     string   `xml:"vendor,attr"`
+	Family     string   `xml:"osfamily,attr"`
+	Generation string   `xml:"osgen,attr"`
+	Accuracy   string   `xml:"accuracy,attr"`
+	CPEs       []string `xml:"cpe"`
+}
+
+func parseNmapXML(data []byte) (map[netip.Addr]OSFingerprint, error) {
+	var run nmapRun
+	if err := xml.Unmarshal(data, &run); err != nil {
+		return nil, err
+	}
+	fingerprints := make(map[netip.Addr]OSFingerprint)
+	for _, host := range run.Hosts {
+		if host.OS == nil || len(host.OS.Matches) == 0 {
+			continue
+		}
+		var address netip.Addr
+		for _, candidate := range host.Addresses {
+			parsed, err := netip.ParseAddr(candidate.Address)
+			if err == nil {
+				address = parsed.Unmap()
+				break
+			}
+		}
+		if !address.IsValid() {
+			continue
+		}
+		match := host.OS.Matches[0]
+		fingerprint := OSFingerprint{
+			Name:     match.Name,
+			Accuracy: parseAccuracy(match.Accuracy),
+		}
+		if len(match.Classes) > 0 {
+			class := match.Classes[0]
+			fingerprint.Vendor = class.Vendor
+			fingerprint.Family = class.Family
+			fingerprint.Generation = class.Generation
+			fingerprint.CPEs = append([]string(nil), class.CPEs...)
+			if accuracy := parseAccuracy(class.Accuracy); accuracy > fingerprint.Accuracy {
+				fingerprint.Accuracy = accuracy
+			}
+		}
+		fingerprints[address] = fingerprint
+	}
+	return fingerprints, nil
+}
+
+func parseAccuracy(value string) int {
+	accuracy, err := strconv.Atoi(value)
+	if err != nil || accuracy < 0 {
+		return 0
+	}
+	return accuracy
 }
 
 func (p *SystemNetworkProber) scanTCP(ctx context.Context, targets []netip.Addr, settings config.NetworkProbeConfig) (map[netip.Addr][]int, error) {

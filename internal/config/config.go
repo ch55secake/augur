@@ -51,13 +51,21 @@ type Device struct {
 	Networks    []string `json:"networks,omitempty"`
 }
 
+type OSDetectionConfig struct {
+	Enabled  bool     `json:"enabled"`
+	Binary   string   `json:"binary"`
+	Timeout  Duration `json:"timeout"`
+	MaxHosts int      `json:"max_hosts"`
+}
+
 type NetworkProbeConfig struct {
-	Enabled     bool     `json:"enabled"`
-	Interval    Duration `json:"interval"`
-	Timeout     Duration `json:"timeout"`
-	Concurrency int      `json:"concurrency"`
-	MaxHosts    int      `json:"max_hosts"`
-	TCPPorts    []int    `json:"tcp_ports"`
+	Enabled     bool              `json:"enabled"`
+	Interval    Duration          `json:"interval"`
+	Timeout     Duration          `json:"timeout"`
+	Concurrency int               `json:"concurrency"`
+	MaxHosts    int               `json:"max_hosts"`
+	TCPPorts    []int             `json:"tcp_ports"`
+	OSDetection OSDetectionConfig `json:"os_detection"`
 }
 
 type Config struct {
@@ -82,6 +90,11 @@ func Default() Config {
 			Concurrency: 32,
 			MaxHosts:    1024,
 			TCPPorts:    []int{22, 80, 443},
+			OSDetection: OSDetectionConfig{
+				Binary:   "nmap",
+				Timeout:  Duration{Duration: 30 * time.Second},
+				MaxHosts: 32,
+			},
 		},
 		Enforce:  true,
 		LogLevel: "info",
@@ -206,6 +219,9 @@ func validateProbeConfig(c Config, networkNames map[string]struct{}, networkPref
 	}
 
 	settings := c.NetworkProbes
+	if settings.OSDetection.Enabled && !settings.Enabled {
+		return errors.New("network_probes.os_detection requires network_probes.enabled")
+	}
 	if !settings.Enabled {
 		return nil
 	}
@@ -226,6 +242,20 @@ func validateProbeConfig(c Config, networkNames map[string]struct{}, networkPref
 	}
 	if len(settings.TCPPorts) == 0 {
 		return errors.New("network_probes.tcp_ports must contain at least one port")
+	}
+	if settings.OSDetection.Enabled {
+		if strings.TrimSpace(settings.OSDetection.Binary) == "" {
+			return errors.New("network_probes.os_detection.binary must not be empty")
+		}
+		if settings.OSDetection.Timeout.Duration <= 0 {
+			return errors.New("network_probes.os_detection.timeout must be greater than zero")
+		}
+		if settings.OSDetection.Timeout.Duration > 10*time.Minute {
+			return errors.New("network_probes.os_detection.timeout must not exceed ten minutes")
+		}
+		if settings.OSDetection.MaxHosts < 1 || settings.OSDetection.MaxHosts > settings.MaxHosts {
+			return fmt.Errorf("network_probes.os_detection.max_hosts must be between 1 and %d", settings.MaxHosts)
+		}
 	}
 
 	seenPorts := make(map[int]struct{}, len(settings.TCPPorts))

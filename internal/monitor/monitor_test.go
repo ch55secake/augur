@@ -62,6 +62,38 @@ func TestScanDoesNotEnforceDryRun(t *testing.T) {
 	}
 }
 
+func TestScanObserveModeDoesNotEnforce(t *testing.T) {
+	settings := config.Default()
+	settings.Mode = "observe"
+	settings.Enforce = true
+	enforcer := &recordingEnforcer{}
+	service := New(fakeDiscoverer{connections: []Connection{{PID: 101, Local: mustAddrPort(t, "192.168.1.109:22"), Remote: mustAddrPort(t, "10.0.0.50:50001"), State: "ESTABLISHED"}}}, enforcer, settings, slog.Default())
+	if err := service.Scan(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(enforcer.pids) != 0 {
+		t.Fatalf("terminated PIDs = %v", enforcer.pids)
+	}
+}
+
+func TestScanObservationPolicyAllowsAndLimitsTermination(t *testing.T) {
+	settings := config.Default()
+	settings.ObservationPolicy.AllowAddresses = []string{"10.0.0.10"}
+	settings.ObservationPolicy.TerminateAddresses = []string{"10.0.0.20"}
+	enforcer := &recordingEnforcer{}
+	service := New(fakeDiscoverer{connections: []Connection{
+		{PID: 101, Local: mustAddrPort(t, "192.168.1.109:22"), Remote: mustAddrPort(t, "10.0.0.10:50001"), State: "ESTABLISHED"},
+		{PID: 102, Local: mustAddrPort(t, "192.168.1.109:22"), Remote: mustAddrPort(t, "10.0.0.20:50001"), State: "ESTABLISHED"},
+		{PID: 103, Local: mustAddrPort(t, "192.168.1.109:22"), Remote: mustAddrPort(t, "10.0.0.30:50001"), State: "ESTABLISHED"},
+	}}, enforcer, settings, slog.Default())
+	if err := service.Scan(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(enforcer.pids) != 1 || enforcer.pids[0] != 102 {
+		t.Fatalf("terminated PIDs = %v", enforcer.pids)
+	}
+}
+
 func TestScanResolvesSSHIdentityBeforeMatching(t *testing.T) {
 	settings := config.Default()
 	settings.Networks = []config.Network{{CIDR: "192.168.1.0/24"}}

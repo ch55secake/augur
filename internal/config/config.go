@@ -51,6 +51,11 @@ type Device struct {
 	Networks    []string `json:"networks,omitempty"`
 }
 
+type ObservationPolicy struct {
+	AllowAddresses     []string `json:"allow_addresses,omitempty"`
+	TerminateAddresses []string `json:"terminate_addresses,omitempty"`
+}
+
 type NetworkProbeConfig struct {
 	Enabled     bool     `json:"enabled"`
 	Interval    Duration `json:"interval"`
@@ -61,15 +66,17 @@ type NetworkProbeConfig struct {
 }
 
 type Config struct {
-	PollInterval  Duration           `json:"poll_interval"`
-	SSHPorts      []int              `json:"ssh_ports"`
-	Networks      []Network          `json:"recognized_networks"`
-	ProbeNetworks []string           `json:"probe_networks,omitempty"`
-	NetworkProbes NetworkProbeConfig `json:"network_probes,omitempty"`
-	Devices       []Device           `json:"recognized_devices"`
-	Enforce       bool               `json:"enforce"`
-	LogPath       string             `json:"log_path,omitempty"`
-	LogLevel      string             `json:"log_level,omitempty"`
+	PollInterval      Duration           `json:"poll_interval"`
+	SSHPorts          []int              `json:"ssh_ports"`
+	Networks          []Network          `json:"recognized_networks"`
+	ProbeNetworks     []string           `json:"probe_networks,omitempty"`
+	NetworkProbes     NetworkProbeConfig `json:"network_probes,omitempty"`
+	Devices           []Device           `json:"recognized_devices"`
+	Mode              string             `json:"mode,omitempty"`
+	ObservationPolicy ObservationPolicy  `json:"observation_policy,omitempty"`
+	Enforce           bool               `json:"enforce"`
+	LogPath           string             `json:"log_path,omitempty"`
+	LogLevel          string             `json:"log_level,omitempty"`
 }
 
 func Default() Config {
@@ -84,6 +91,7 @@ func Default() Config {
 			TCPPorts:    []int{22, 80, 443},
 		},
 		Enforce:  true,
+		Mode:     "enforce",
 		LogLevel: "info",
 	}
 }
@@ -130,11 +138,28 @@ func Parse(data []byte) (Config, error) {
 }
 
 func (c Config) Validate() error {
+	if c.Mode != "observe" && c.Mode != "enforce" {
+		return fmt.Errorf("mode %q must be observe or enforce", c.Mode)
+	}
 	if c.PollInterval.Duration <= 0 {
 		return errors.New("poll_interval must be greater than zero")
 	}
 	if len(c.SSHPorts) == 0 {
 		return errors.New("ssh_ports must contain at least one port")
+	}
+	seenPolicyAddresses := make(map[string]struct{})
+	for _, values := range [][]string{c.ObservationPolicy.AllowAddresses, c.ObservationPolicy.TerminateAddresses} {
+		for _, value := range values {
+			address, err := netip.ParseAddr(strings.TrimSpace(value))
+			if err != nil {
+				return fmt.Errorf("observation policy address %q is invalid", value)
+			}
+			key := address.Unmap().String()
+			if _, exists := seenPolicyAddresses[key]; exists {
+				return fmt.Errorf("observation policy address %q is duplicated", value)
+			}
+			seenPolicyAddresses[key] = struct{}{}
+		}
 	}
 
 	seenPorts := make(map[int]struct{}, len(c.SSHPorts))

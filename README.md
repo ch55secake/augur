@@ -3,6 +3,8 @@
 
 Augur monitors established `sshd` connections on configured ports and terminates sessions whose authenticated SSH key is not recognized. SSH public-key fingerprints identify credentials, not physical hardware. Network settings can restrict where a recognized device is allowed to connect.
 
+Set `mode` to `observe` to record connections and network observations without terminating sessions. Set it to `enforce` for termination behavior. In enforce mode, `observation_policy.allow_addresses` always permits listed source addresses; when `terminate_addresses` is non-empty, only listed observed source addresses are eligible for termination. SSH key fingerprints remain the primary recognized-device allow mechanism.
+
 ## Network Inventory
 
 Network inventory is disabled by default. To enable audit-only inventory, list the names of private or link-local networks to scan in `probe_networks` and set `network_probes.enabled` to `true`. The names must refer to entries in `recognized_networks`; unnamed networks cannot be probed.

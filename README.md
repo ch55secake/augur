@@ -44,6 +44,24 @@ augur -config /etc/augur/config.json -once -dry-run
 
 The service writes structured JSON audit logs to stderr unless `log_path` is configured. The supplied launchd plist runs it as root and routes stdout and stderr to `/var/log/augur.log`.
 
+## Installation
+
+Install a released binary and example configuration on Linux or macOS with:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/ch55secake/augur/main/scripts/install.sh | sudo sh
+```
+
+The installer detects the platform and architecture, leaves an existing `/etc/augur/config.json` untouched, and supports `--version`, `--prefix`, `--config-dir`, `--dry-run`, and `--uninstall`. Review the generated configuration before starting Augur.
+
+For a complete macOS LaunchDaemon installation, including the managed SSH verbose-logging drop-in:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/ch55secake/augur/main/scripts/install-macos.sh | sudo sh
+```
+
+The macOS installer validates the plist and SSH configuration, refuses to overwrite an existing LaunchDaemon or SSH drop-in, and leaves configuration files in place during uninstall. Use `--dry-run` to inspect actions without changing the host.
+
 Build the binary and launchd artifact with Nix:
 
 ```sh

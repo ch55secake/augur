@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"net/netip"
 	"time"
 
 	"github.com/ch55secake/augur/internal/config"
@@ -106,7 +107,10 @@ func (m *Monitor) Scan(ctx context.Context) error {
 			"device", device.Name,
 		)
 
-		if deviceRecognized || !m.Config.Enforce {
+		if deviceRecognized || m.Config.Mode == "observe" || !m.Config.Enforce || observationAllows(m.Config, connection.Remote.Addr()) {
+			continue
+		}
+		if len(m.Config.ObservationPolicy.TerminateAddresses) > 0 && !observationTerminates(m.Config, connection.Remote.Addr()) {
 			continue
 		}
 		if _, alreadyTerminated := m.terminated[key]; alreadyTerminated {
@@ -131,6 +135,26 @@ func (m *Monitor) Scan(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+func observationAllows(c config.Config, address netip.Addr) bool {
+	address = address.Unmap()
+	for _, value := range c.ObservationPolicy.AllowAddresses {
+		if parsed, err := netip.ParseAddr(value); err == nil && parsed.Unmap() == address {
+			return true
+		}
+	}
+	return false
+}
+
+func observationTerminates(c config.Config, address netip.Addr) bool {
+	address = address.Unmap()
+	for _, value := range c.ObservationPolicy.TerminateAddresses {
+		if parsed, err := netip.ParseAddr(value); err == nil && parsed.Unmap() == address {
+			return true
+		}
+	}
+	return false
 }
 
 func (m *Monitor) scanNetworkInventory(ctx context.Context) {

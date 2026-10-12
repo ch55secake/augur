@@ -50,6 +50,16 @@ func TestParseDefaultsEnforce(t *testing.T) {
 	}
 }
 
+func TestParseObservationModeAndPolicy(t *testing.T) {
+	config, err := Parse([]byte(`{"mode":"observe","observation_policy":{"allow_addresses":["192.168.1.10"],"terminate_addresses":["192.168.1.20"]},"recognized_devices":[{"fingerprint":"SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.Mode != "observe" || len(config.ObservationPolicy.AllowAddresses) != 1 {
+		t.Fatalf("config = %#v", config)
+	}
+}
+
 func TestMatchDevice(t *testing.T) {
 	settings := Config{
 		Networks: []Network{{Name: "trusted", CIDR: "192.168.1.0/24"}},
